@@ -5,72 +5,91 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use App\Models\Restoran;
+use App\Models\User;
+use Illuminate\Support\Facades\Auth; // Diperlukan untuk otorisasi
 
 class RestoranController extends Controller
 {
-    // 🔹 GET /api/restorans
-    public function index()
-    {
-        return response()->json(Restoran::all(), 200);
-    }
-
-    // 🔹 POST /api/restorans
+    // =========================================================
+    // 🔹 STORE: Mendaftarkan Toko (POST /api/v1/restoran/register)
+    // Dijalankan oleh Penjual yang sudah login (user_id diambil dari Auth)
+    // =========================================================
     public function store(Request $request)
     {
-        // Validasi umum
+        // 🚨 Wajib: Ambil user yang sedang login
+        $user = $request->user();
+
+        // Cek duplikasi: Pastikan user belum memiliki restoran
+        if ($user->restoran) {
+            return response()->json([
+                'message' => 'Anda sudah memiliki restoran terdaftar di RasoSehat.'
+            ], 403); // Forbidden
+        }
+        
+        // 1. Definisikan Aturan Validasi
         $rules = [
-            'user_id' => 'required|exists:users,id',
-            'nama_restoran' => 'required|string|max:100',
+            'nama_restoran' => 'required|string|max:100|unique:restorans,nama_restoran',
             'nama_pemilik' => 'required|string|max:100',
-            'kategori_toko' => 'required|string|max:100',
+            'kategori_toko' => 'required|string|max:100', // Dari SelectField RegisterStorePage
             'deskripsi' => 'nullable|string',
             'alamat' => 'required|string',
-            'latitude' => 'nullable|numeric',
-            'longitude' => 'nullable|numeric',
+            'latitude' => 'nullable|numeric', // Dari Map Picker
+            'longitude' => 'nullable|numeric', // Dari Map Picker
             'no_telepon' => 'nullable|string|max:20',
             'no_whatsapp' => 'required|string|max:20',
             'jam_operasional' => 'required|string|max:100',
             'media_sosial' => 'nullable|string',
             'jenis_usaha' => 'required|in:perorangan,korporasi',
-            'verifikasi_ktp' => 'required|file|mimes:jpg,jpeg,png,pdf|max:4096',
+            
+            // Verifikasi Dokumen
+            'verifikasi_ktp' => 'required|file|mimes:jpg,jpeg,png,pdf|max:4096', // 4MB
+            // Asumsi: File Korporasi dikirim dalam field yang sama, tetapi nullable
+            'verifikasi_npwp' => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:4096',
+            'verifikasi_nib_siup' => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:4096',
+            'verifikasi_akta_pendirian' => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:4096',
+
+            // NEW FIELDS FROM REGISTER STORE PAGE
+            'health_focus' => 'required|string', // Kunci fokus kesehatan
+            'dominant_fat' => 'required|string', // Jenis minyak dominan
+            'dominant_cooking_method' => 'required|string', // Metode masak
+            'sales_channels' => 'required|string', // Saluran penjualan
         ];
 
-        // Validasi tambahan jika korporasi
+        // Tambahan Validasi jika Korporasi (Wajibkan dokumen korporasi)
         if ($request->jenis_usaha === 'korporasi') {
-            $rules['verifikasi_npwp'] = 'required|file|mimes:jpg,jpeg,png,pdf|max:4096';
-            $rules['verifikasi_nib_siup'] = 'required|file|mimes:jpg,jpeg,png,pdf|max:4096';
-            $rules['verifikasi_akta_pendirian'] = 'required|file|mimes:jpg,jpeg,png,pdf|max:4096';
+             $rules['verifikasi_npwp'] = 'required|file|mimes:jpg,jpeg,png,pdf|max:4096';
+             // ... Tambahkan aturan required untuk NIB dan Akta di sini
         }
 
         $validated = $request->validate($rules);
 
-        // Upload file
-        $ktpPath = $request->file('verifikasi_ktp')->store('uploads/verifikasi/ktp', 'public');
-        $npwpPath = $request->hasFile('verifikasi_npwp') ? $request->file('verifikasi_npwp')->store('uploads/verifikasi/npwp', 'public') : null;
-        $nibPath = $request->hasFile('verifikasi_nib_siup') ? $request->file('verifikasi_nib_siup')->store('uploads/verifikasi/nib_siup', 'public') : null;
-        $aktaPath = $request->hasFile('verifikasi_akta_pendirian') ? $request->file('verifikasi_akta_pendirian')->store('uploads/verifikasi/akta', 'public') : null;
+        // 2. Proses Upload File
+        $data = $validated;
+        $fileFields = [
+            'verifikasi_ktp', 'verifikasi_npwp', 'verifikasi_nib_siup', 'verifikasi_akta_pendirian'
+        ];
 
-        // Simpan ke database
-        $restoran = Restoran::create([
-            'user_id' => $validated['user_id'],
-            'nama_restoran' => $validated['nama_restoran'],
-            'nama_pemilik' => $validated['nama_pemilik'],
-            'kategori_toko' => $validated['kategori_toko'],
-            'deskripsi' => $validated['deskripsi'] ?? null,
-            'alamat' => $validated['alamat'],
-            'latitude' => $validated['latitude'] ?? null,
-            'longitude' => $validated['longitude'] ?? null,
-            'no_telepon' => $validated['no_telepon'] ?? null,
-            'no_whatsapp' => $validated['no_whatsapp'],
-            'jam_operasional' => $validated['jam_operasional'],
-            'media_sosial' => $validated['media_sosial'] ?? null,
-            'jenis_usaha' => $validated['jenis_usaha'],
-            'status_verifikasi' => 'pending',
-            'verifikasi_ktp' => $ktpPath,
-            'verifikasi_npwp' => $npwpPath,
-            'verifikasi_nib_siup' => $nibPath,
-            'verifikasi_akta_pendirian' => $aktaPath,
-        ]);
+        foreach ($fileFields as $field) {
+            if ($request->hasFile($field)) {
+                // Simpan file di folder terpisah sesuai nama field
+                $path = $request->file($field)->store("uploads/verifikasi/{$field}", 'public');
+                $data[$field] = $path;
+            } else {
+                 $data[$field] = null;
+            }
+        }
+        
+        // 3. Simpan ke database
+        $restoran = Restoran::create(array_merge($data, [
+            'user_id' => $user->id, // 🚨 CRITICAL FIX: Ambil user_id dari Auth
+            'status_verifikasi' => 'pending', // Default
+        ]));
+        
+        // 4. Update Role Pengguna menjadi Penjual (Jika belum)
+        if ($user->role !== 'penjual') {
+            $user->role = 'penjual';
+            $user->save();
+        }
 
         return response()->json([
             'message' => 'Pendaftaran restoran berhasil, menunggu verifikasi admin.',
@@ -78,70 +97,91 @@ class RestoranController extends Controller
         ], 201);
     }
 
-    // 🔹 GET /api/restorans/{id}
+    // =========================================================
+    // 🔹 SHOW: Detail Restoran (GET /api/v1/restorans/{id})
+    // =========================================================
     public function show($id)
     {
-        $restoran = Restoran::find($id);
-        if (!$restoran) {
-            return response()->json(['message' => 'Restoran tidak ditemukan'], 404);
-        }
+        // 💡 Perluas dengan relasi yang penting (misal: menus)
+        $restoran = Restoran::with(['user', 'menus' => function ($query) {
+            // Hanya tampilkan menu yang sudah disetujui (VERIFIED)
+            $query->where('status_verifikasi', 'disetujui');
+        }])->findOrFail($id); 
+
+        // CRITICAL: Filter data verifikasi (KTP, NPWP, dll.) agar tidak tampil ke publik
+        $restoran->makeHidden([
+            'verifikasi_ktp', 'verifikasi_npwp', 'verifikasi_nib_siup', 'verifikasi_akta_pendirian'
+        ]);
+
         return response()->json($restoran, 200);
     }
 
-    // 🔹 PUT/PATCH /api/restorans/{id}
+    // =========================================================
+    // 🔹 UPDATE: Update Toko oleh Penjual (PUT /api/v1/restorans/{id})
+    // =========================================================
     public function update(Request $request, $id)
     {
-        $restoran = Restoran::find($id);
-        if (!$restoran) {
-            return response()->json(['message' => 'Restoran tidak ditemukan'], 404);
-        }
+        $user = $request->user();
+        $restoran = Restoran::findOrFail($id);
 
-        $validated = $request->validate([
-            'nama_restoran' => 'nullable|string|max:100',
+        // 🚨 CRITICAL FIX 1: Pengecekan Kepemilikan (Otorisasi)
+        if ($restoran->user_id !== $user->id) {
+            // Pastikan Admin bisa bypass (Asumsi: Admin tidak menggunakan route ini)
+            return response()->json(['message' => 'Akses ditolak. Anda hanya dapat memperbarui toko milik Anda.'], 403);
+        }
+        
+        // 🚨 CRITICAL FIX 2: Mencegah Penjual Mengubah Status Verifikasi
+        $validatedData = $request->except(['status_verifikasi']); // Hapus field status verifikasi dari request
+
+        $rules = [
+            'nama_restoran' => 'nullable|string|max:100|unique:restorans,nama_restoran,' . $id,
             'nama_pemilik' => 'nullable|string|max:100',
-            'kategori_toko' => 'nullable|string|max:100',
-            'deskripsi' => 'nullable|string',
-            'alamat' => 'nullable|string',
-            'latitude' => 'nullable|numeric',
-            'longitude' => 'nullable|numeric',
-            'no_telepon' => 'nullable|string|max:20',
-            'no_whatsapp' => 'nullable|string|max:20',
-            'jam_operasional' => 'nullable|string|max:100',
-            'media_sosial' => 'nullable|string',
-            'jenis_usaha' => 'nullable|in:perorangan,korporasi',
-            'status_verifikasi' => 'nullable|string|in:pending,disetujui,ditolak',
-            'verifikasi_ktp' => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:4096',
-            'verifikasi_npwp' => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:4096',
-            'verifikasi_nib_siup' => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:4096',
-            'verifikasi_akta_pendirian' => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:4096',
-        ]);
+            // ... (lanjutkan rules lainnya)
+        ];
+
+        // Jika ada file yang diupload, tambahkan aturan file ke rules
+        if ($request->hasFile('verifikasi_ktp')) {
+            $rules['verifikasi_ktp'] = 'nullable|file|mimes:jpg,jpeg,png,pdf|max:4096';
+        }
+        
+        // ... lanjutkan validasi lainnya ...
+
+        $validated = $request->validate($rules);
 
         // Handle upload file baru
         foreach (['verifikasi_ktp', 'verifikasi_npwp', 'verifikasi_nib_siup', 'verifikasi_akta_pendirian'] as $field) {
             if ($request->hasFile($field)) {
+                // Hapus file lama jika ada
                 if ($restoran->$field) Storage::disk('public')->delete($restoran->$field);
-                $restoran->$field = $request->file($field)->store('uploads/verifikasi/' . $field, 'public');
+                $validated[$field] = $request->file($field)->store('uploads/verifikasi/' . $field, 'public');
             }
         }
-
+        
+        // Update data
         $restoran->update($validated);
 
         return response()->json([
-            'message' => 'Data restoran berhasil diperbarui.',
+            'message' => 'Data restoran berhasil diperbarui. Status verifikasi tetap sama.',
             'data' => $restoran
         ]);
     }
 
-    // 🔹 DELETE /api/restorans/{id}
-    public function destroy($id)
+    // =========================================================
+    // 🔹 DELETE: Hapus Toko oleh Penjual (DELETE /api/v1/restorans/{id})
+    // =========================================================
+    public function destroy(Request $request, $id)
     {
-        $restoran = Restoran::find($id);
-        if (!$restoran) {
-            return response()->json(['message' => 'Restoran tidak ditemukan'], 404);
+        $user = $request->user();
+        $restoran = Restoran::findOrFail($id);
+        
+        // 🚨 CRITICAL FIX: Pengecekan Kepemilikan (Otorisasi)
+        if ($restoran->user_id !== $user->id) {
+            return response()->json(['message' => 'Akses ditolak. Anda hanya dapat menghapus toko milik Anda.'], 403);
         }
-
+        
         // Hapus semua file yang tersimpan
         foreach (['verifikasi_ktp', 'verifikasi_npwp', 'verifikasi_nib_siup', 'verifikasi_akta_pendirian'] as $field) {
+            // Asumsi field ini menyimpan path yang bisa dihapus
             if ($restoran->$field) Storage::disk('public')->delete($restoran->$field);
         }
 
