@@ -5,25 +5,57 @@ namespace App\Http\Controllers;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Auth;
 
+// PASTIKAN CONTROLLER INI MEWARISI METHOD getNavbarData() DARI CONTROLLER UTAMA
 class UserController extends Controller
 {
     /**
-     * Tampilkan semua data user.
+     * Tampilkan halaman Profile untuk user yang sedang login (Web/Blade).
+     * Sesuai dengan Profile.jsx yang menampilkan data diri user terautentikasi.
      */
-    public function index()
+    public function showProfile()
     {
+        // Mendapatkan user yang sedang login
+        $user = Auth::user();
+        
+        if (!$user) {
+            // Jika user tidak terautentikasi, redirect ke halaman login
+            return redirect()->route('login');
+        }
+        
+        // Mengambil data navbar (user data dan notifikasi)
+        $navbarData = $this->getNavbarData();
+        
+        // Menggabungkan data spesifik halaman (data user) dengan data navbar
+        return view('pages.user.profile', array_merge($navbarData, [
+            // Data user yang akan ditampilkan di form/UI halaman profile
+            'user' => $user, 
+            'userData' => $navbarData['userData'], // Data user yang sudah diformat dari navbar helper
+        ]));
+    }
+
+    // ----------------------------------------------------------------------
+    // METODE API LAMA (DIPERTAHANKAN UNTUK KEPENTINGAN API / AJAX)
+    // ----------------------------------------------------------------------
+
+    /**
+     * Tampilkan semua data user (API Endpoint).
+     */
+    public function indexApi()
+    {
+        // Method ini tetap sebagai API endpoint untuk mengambil daftar semua user
         $users = User::all();
 
         return response()->json([
             'success' => true,
-            'message' => 'Daftar semua pengguna',
+            'message' => 'Daftar semua pengguna (API)',
             'data' => $users
         ], 200);
     }
 
     /**
-     * Simpan user baru ke database.
+     * Simpan user baru ke database (API Endpoint, mungkin untuk pendaftaran).
      */
     public function store(Request $request)
     {
@@ -47,9 +79,9 @@ class UserController extends Controller
     }
 
     /**
-     * Tampilkan detail user berdasarkan ID.
+     * Tampilkan detail user berdasarkan ID (API Endpoint).
      */
-    public function show($id)
+    public function showApi($id)
     {
         $user = User::find($id);
 
@@ -67,7 +99,7 @@ class UserController extends Controller
     }
 
     /**
-     * Update data user.
+     * Update data user (API Endpoint, bisa digunakan form AJAX di Profile).
      */
     public function update(Request $request, $id)
     {
@@ -93,7 +125,11 @@ class UserController extends Controller
         }
 
         $user->update($validated);
+        
+        // Jika digunakan untuk form update di Blade, Anda mungkin ingin me-redirect:
+        // return redirect()->route('profile')->with('success', 'Profil berhasil diperbarui!');
 
+        // Karena ini API/AJAX, kembalikan JSON
         return response()->json([
             'success' => true,
             'message' => 'User berhasil diperbarui',
@@ -102,7 +138,7 @@ class UserController extends Controller
     }
 
     /**
-     * Hapus user berdasarkan ID.
+     * Hapus user berdasarkan ID (API Endpoint).
      */
     public function destroy($id)
     {
